@@ -1,0 +1,14 @@
+streamlit
+streamlit-audiorecorder
+librosa
+scikit-learn
+numpy
+pandas
+gtts
+openai-whisper
+soundfile
+scipy
+matplotlib
+seaborn
+parselmouth-praat
+pickle5

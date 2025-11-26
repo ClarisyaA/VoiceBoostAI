@@ -1,0 +1,677 @@
+import streamlit as st
+import os
+import numpy as np
+import librosa
+import tempfile
+import random
+from gtts import gTTS
+import parselmouth
+from parselmouth.praat import call
+import whisper
+from sklearn.preprocessing import StandardScaler
+import warnings
+warnings.filterwarnings('ignore')
+from joblib import load
+
+word_list = [
+    # Kata-kata dengan vokal yang jelas untuk analisis formant
+    "beat", "bit", "bet", "bat", "boot", "book", "boat", "bought", "but", "bot",
+    
+    # Kata-kata dengan konsonan yang sulit untuk dysarthria
+    "church", "judge", "strength", "lengths", "sixths", "twelfths", "glimpsed", "prompted",
+    
+    # Kata-kata dengan cluster konsonan  
+    "splash", "spring", "script", "straight", "shrink", "thrash", "glimpse", "prompt",
+    
+    # Kata-kata dengan suara frikatif
+    "fish", "ship", "think", "that", "vision", "measure", "rough", "smooth",
+    
+    # Kata-kata dengan suara plosif
+    "papa", "baby", "kick", "gag", "tight", "dad", "pop", "bob",
+    
+    # Kata-kata dengan suara nasal
+    "mom", "noon", "ring", "hang", "mean", "main", "mine", "moon",
+    
+    # Kata-kata dengan suara likuid
+    "little", "really", "yellow", "roll", "will", "real", "royal", "loyal",
+    
+    # Kata-kata dengan diftong
+    "house", "loud", "choice", "point", "light", "proud", "about", "found",
+    
+    # Kata-kata multisuku untuk menguji koordinasi
+    "butterfly", "beautiful", "vegetables", "university", "opportunity", "information",
+    "hospital", "restaurant", "telephone", "computer", "television", "refrigerator",
+    
+    # Kata-kata dengan stress pattern yang berbeda
+    "record", "present", "object", "subject", "perfect", "reject", "conflict", "content",
+    
+    # Kata-kata fungsional yang sering digunakan
+    "the", "and", "for", "are", "but", "not", "you", "all", "can", "had",
+    
+    # Kata-kata dengan suara vokal yang kontrastif
+    "seen", "sin", "pen", "pan", "fun", "fan", "cut", "cat", "hot", "hat",
+    
+    # Kata-kata dengan akhiran yang berbeda
+    "running", "jumped", "quickly", "slowly", "happily", "careful", "hopeful", "peaceful"
+]
+
+# SENTENCE LIST - Dirancang untuk menguji prosodi, ritme, dan koartikulasi
+sentence_list = [
+    # Kalimat dengan berbagai struktur vokal untuk analisis VSA
+    "Will Robin wear a yellow lily? .",
+    "She sells seashells by the seashore.",
+    "Peter Piper picked a peck of pickled peppers.",
+    
+    # Kalimat dengan cluster konsonan yang menantang
+    "The sixth sick sheik's sixth sheep's sick.",
+    "How much wood would a woodchuck chuck if a woodchuck could chuck wood?",
+    "Three free throws through thick fog.",
+    
+    # Kalimat dengan pola ritme yang berbeda
+    "Rain in Spain falls mainly on the plain.",
+    "Round and round the rugged rock the ragged rascal ran.",
+    "Toy boat, toy boat, toy boat.",
+    
+    # Kalimat dengan variasi pitch dan intonasi
+    "Can you help me with this problem?",
+    "What a beautiful day it is today!",
+    "I don't think that's correct.",
+    "Where are you going this afternoon?",
+    
+    # Kalimat dengan koordinasi motorik yang kompleks
+    "The butterfly flew gracefully through the colorful garden.",
+    "My grandmother makes delicious chocolate chip cookies every Sunday.",
+    "The university students studied diligently for their final examinations.",
+    
+    # Kalimat dengan berbagai suara frikatif
+    "Fresh fish and chips from the shop.",
+    "The thick fog made visibility very poor.",
+    "She chose shoes with shiny silver buckles.",
+    
+    # Kalimat dengan suara plosif berulang
+    "Big black bugs bleed blue blood.",
+    "Pretty Polly picked pink peonies.",
+    "Daddy's dirty dog dug deep ditches.",
+    
+    # Kalimat dengan suara nasal
+    "Many men and women came to the meeting.",
+    "The moon shines brightly on the mountain.",
+    "Morning brings new beginnings and opportunities.",
+    
+    # Kalimat dengan suara likuid
+    "Really lovely yellow flowers bloom in our garden.",
+    "The little girl will roll the ball down the hill.",
+    "Royal blue ribbons were wrapped around the presents.",
+    
+    # Kalimat dengan tempo dan ritme yang bervariasi
+    "Slowly and carefully, she walked across the icy sidewalk.",
+    "Quickly! Run to the store before it closes!",
+    "The old man sat quietly reading his newspaper.",
+    
+    # Kalimat dengan prosodi emosional
+    "I'm so excited about our vacation next week!",
+    "That was the most difficult test I've ever taken.",
+    "Please speak more clearly so I can understand you.",
+    
+    # Kalimat dengan struktur gramatikal yang kompleks
+    "Although it was raining heavily, we decided to go for a walk anyway.",
+    "The book that I borrowed from the library yesterday was very interesting.",
+    "If you finish your homework early, you can watch television tonight.",
+    
+    # Kalimat dengan pengulangan suara untuk konsistensi
+    "Red leather, yellow leather, red leather, yellow leather.",
+    "Unique New York, unique New York, unique New York.",
+    "Sally sells shells, Sally sells shells, Sally sells shells.",
+    
+    # Kalimat dengan kontras stress
+    "I SAID the book is on the TABLE.",
+    "The FIRST student finished BEFORE the others.",
+    "We're going to the MOVIES, not the RESTAURANT.",
+    
+    # Kalimat dengan deskripsi untuk testing kontinuitas
+    "The children played happily in the park while their parents watched nearby.",
+    "After finishing breakfast, she packed her lunch and walked to work.",
+    "The doctor carefully examined the patient and prescribed appropriate medication.",
+    
+    # Kalimat dengan counting dan sequencing
+    "One, two, three, four, five, six, seven, eight, nine, ten.",
+    "Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday.",
+    "January, February, March, April, May, June, July, August.",
+    
+    # Kalimat dengan automatic speech
+    "Thank you very much for your help today.",
+    "How are you feeling this morning?",
+    "Have a wonderful day and take care of yourself.",
+    "Please call me when you arrive safely.",
+    
+    # Kalimat dengan alternating motor movements
+    "Pa-ta-ka, pa-ta-ka, pa-ta-ka, pa-ta-ka.",
+    "Buttercup, buttercup, buttercup, buttercup.",
+    "Puh-tuh-kuh, puh-tuh-kuh, puh-tuh-kuh.",
+    
+    # Kalimat untuk testing breath support
+    "The magnificent seven rode their horses across the vast prairie under the blazing sun.",
+    "Communication is essential for building strong relationships with family and friends throughout life.",
+    "Technology continues to advance rapidly, changing the way we work, learn, and connect with others around the world."
+]
+
+
+class DysarthriaAnalyzer:
+    def __init__(self, model_path):
+        self.model_path = model_path
+        self.model = None
+        self.scaler = None
+        self.load_model()
+        print("MODEL INFO:")
+        print("Model type:", type(self.model))
+        print("Scaler mean (first 7):", self.scaler.mean_[:7])
+
+    def load_model(self):
+        try:
+            model_data = load(self.model_path)
+            self.model = model_data['model']
+            self.scaler = model_data['scaler']
+        except Exception as e:
+            st.error(f"Error loading model: {e}")
+    
+    def extract_formant_features(self, audio_path):
+        try:
+            sound = parselmouth.Sound(audio_path)
+            formant = call(sound, "To Formant (burg)", 0.0, 5, 5500, 0.025, 50)
+            
+            f1_values = []
+            f2_values = []
+            f3_values = []
+            
+            for t in np.arange(0.1, sound.duration - 0.1, 0.05):
+                f1 = call(formant, "Get value at time", 1, t, "Hertz", "Linear")
+                f2 = call(formant, "Get value at time", 2, t, "Hertz", "Linear")
+                f3 = call(formant, "Get value at time", 3, t, "Hertz", "Linear")
+                
+                if not (np.isnan(f1) or np.isnan(f2) or np.isnan(f3)):
+                    f1_values.append(f1)
+                    f2_values.append(f2)
+                    f3_values.append(f3)
+            
+            if len(f1_values) > 0:
+                return {
+                    'f1_mean': np.mean(f1_values),
+                    'f1_std': np.std(f1_values),
+                    'f2_mean': np.mean(f2_values),
+                    'f2_std': np.std(f2_values),
+                    'f3_mean': np.mean(f3_values),
+                    'f3_std': np.std(f3_values),
+                    'vsa': self.calculate_vsa(f1_values, f2_values)
+                }
+        except:
+            pass
+            
+        return {
+            'f1_mean': 0, 'f1_std': 0, 'f2_mean': 0, 
+            'f2_std': 0, 'f3_mean': 0, 'f3_std': 0, 'vsa': 0
+        }
+    
+    def calculate_vsa(self, f1_values, f2_values):
+        if len(f1_values) < 3 or len(f2_values) < 3:
+            return 0
+        
+        f1_range = np.percentile(f1_values, 90) - np.percentile(f1_values, 10)
+        f2_range = np.percentile(f2_values, 90) - np.percentile(f2_values, 10)
+        return f1_range * f2_range
+    
+    def extract_prosodic_features(self, audio_path):
+        """Extract prosodic features: pitch, intensity, jitter, shimmer"""
+        try:
+            sound = parselmouth.Sound(audio_path)
+            pitch = call(sound, "To Pitch", 0.0, 75, 600)
+            intensity = call(sound, "To Intensity", 75, 0.0, "yes")
+            
+            # Pitch features
+            pitch_values = []
+            for t in np.arange(0.1, sound.duration - 0.1, 0.01):
+                p = call(pitch, "Get value at time", t, "Hertz", "linear")
+                if not np.isnan(p):
+                    pitch_values.append(p)
+            
+            # Intensity features - FIX: Ganti "Linear" ke "dB"
+            intensity_values = []
+            for t in np.arange(0.1, sound.duration - 0.1, 0.01):
+                i = call(intensity, "Get value at time", t, "dB")  # FIXED
+                if not np.isnan(i):
+                    intensity_values.append(i)
+            
+            if len(pitch_values) > 0 and len(intensity_values) > 0:
+                return {
+                    'pitch_mean': np.mean(pitch_values),
+                    'pitch_std': np.std(pitch_values),
+                    'pitch_range': max(pitch_values) - min(pitch_values),
+                    'intensity_mean': np.mean(intensity_values),
+                    'intensity_std': np.std(intensity_values),
+                    'intensity_range': max(intensity_values) - min(intensity_values)
+                }
+        except:
+            pass
+            
+        return {
+            'pitch_mean': 150, 'pitch_std': 20, 'pitch_range': 100,  # Default lebih realistis
+            'intensity_mean': 60, 'intensity_std': 10, 'intensity_range': 30
+        }
+
+
+    def extract_spectral_features(self, audio_path):
+        try:
+            y, sr = librosa.load(audio_path, sr=22050)
+            
+            mfccs = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
+            spectral_centroids = librosa.feature.spectral_centroid(y=y, sr=sr)[0]
+            spectral_bandwidth = librosa.feature.spectral_bandwidth(y=y, sr=sr)[0]
+            spectral_rolloff = librosa.feature.spectral_rolloff(y=y, sr=sr)[0]
+            zero_crossing_rate = librosa.feature.zero_crossing_rate(y)[0]
+            
+            onset_frames = librosa.onset.onset_detect(y=y, sr=sr)
+            speaking_rate = len(onset_frames) / (len(y) / sr) * 60
+            
+            features = {
+                'spectral_centroid_mean': np.mean(spectral_centroids),
+                'spectral_centroid_std': np.std(spectral_centroids),
+                'spectral_bandwidth_mean': np.mean(spectral_bandwidth),
+                'spectral_rolloff_mean': np.mean(spectral_rolloff),
+                'zero_crossing_rate_mean': np.mean(zero_crossing_rate),
+                'speaking_rate': speaking_rate
+            }
+            
+            for i in range(13):
+                features[f'mfcc_{i}_mean'] = np.mean(mfccs[i])
+                features[f'mfcc_{i}_std'] = np.std(mfccs[i])
+            
+            return features
+            
+        except Exception as e:
+            features = {
+                'spectral_centroid_mean': 0, 'spectral_centroid_std': 0,
+                'spectral_bandwidth_mean': 0, 'spectral_rolloff_mean': 0,
+                'zero_crossing_rate_mean': 0, 'speaking_rate': 0
+            }
+            
+            for i in range(13):
+                features[f'mfcc_{i}_mean'] = 0
+                features[f'mfcc_{i}_std'] = 0
+                
+            return features
+    
+    def extract_all_features(self, audio_path):
+        formant_features = self.extract_formant_features(audio_path)
+        prosodic_features = self.extract_prosodic_features(audio_path)
+        spectral_features = self.extract_spectral_features(audio_path)
+        
+        all_features = {**formant_features, **prosodic_features, **spectral_features}
+        return all_features
+    
+    def predict(self, audio_path):
+        if self.model is None or self.scaler is None:
+            return None, "Model not loaded"
+        
+        features = self.extract_all_features(audio_path)
+        feature_vector = np.array(list(features.values())).reshape(1, -1)
+        feature_vector_scaled = self.scaler.transform(feature_vector)
+        
+        prediction = self.model.predict(feature_vector_scaled)[0]
+        
+        if hasattr(self.model, 'predict_proba'):
+            probability = self.model.predict_proba(feature_vector_scaled)[0]
+        else:
+            decision_score = self.model.decision_function(feature_vector_scaled)[0]
+            probability = np.array([1 / (1 + np.exp(decision_score)), 1 / (1 + np.exp(-decision_score))])
+        
+        print("=== DEBUG ===")
+        print("Extracted features (raw):", features)
+        print("Feature vector shape:", feature_vector.shape)
+        print("Scaled vector shape:", feature_vector_scaled.shape)
+        print("Scaled vector values:", feature_vector_scaled)
+        print("Predicted proba:", probability)
+        
+        return prediction, probability
+
+def text_to_speech(text, lang='en'):
+    tts = gTTS(text=text, lang=lang, slow=False)
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp_file:
+        tts.save(tmp_file.name)
+        return tmp_file.name
+
+def transcribe_audio(audio_path):
+    model = whisper.load_model("base")
+    result = model.transcribe(audio_path, language="en")
+    return result["text"]
+
+def main():
+    st.set_page_config(page_title="VoiceBoost - Dysarthria Detection", layout="wide", page_icon="🎙️")
+    
+    # Custom CSS for better styling
+    st.markdown("""
+    <style>
+    .main-header {
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        padding: 2rem;
+        border-radius: 10px;
+        text-align: center;
+        color: white;
+        margin-bottom: 2rem;
+    }
+    .feature-card {
+        background: #f8f9fa;
+        padding: 1.5rem;
+        border-radius: 10px;
+        border-left: 4px solid #667eea;
+        margin: 1rem 0;
+    }
+    .result-normal {
+        background: #d4edda;
+        border: 1px solid #c3e6cb;
+        padding: 1rem;
+        border-radius: 8px;
+        color: #155724;
+    }
+    .result-dysarthria {
+        background: #f8d7da;
+        border: 1px solid #f5c6cb;
+        padding: 1rem;
+        border-radius: 8px;
+        color: #721c24;
+    }
+    .audio-option {
+        background: white;
+        padding: 1.5rem;
+        border-radius: 10px;
+        border: 2px solid #e9ecef;
+        margin: 1rem 0;
+        transition: all 0.3s ease;
+    }
+    .audio-option:hover {
+        border-color: #667eea;
+        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # Main header
+    st.markdown("""
+    <div class="main-header">
+        <h1>🎙️ VoiceBoost</h1>
+        <h3>Advanced Speech Analysis & Dysarthria Detection</h3>
+        <p>Powered by AI and Machine Learning</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    analyzer = DysarthriaAnalyzer("models/dysarthria_classifier.joblib")
+    
+    tab1, tab2 = st.tabs(["🏠 Home", "🎯 Speech Training"])
+    
+    with tab1:
+        st.markdown("### 🏠 Welcome to VoiceBoost")
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            st.markdown("""
+            <div class="feature-card">
+                <h4>🚀 What is VoiceBoost?</h4>
+                <p>VoiceBoost is an advanced AI-powered application designed to detect dysarthria through comprehensive speech analysis. 
+                Our system uses cutting-edge machine learning algorithms to analyze various aspects of speech patterns.</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            st.markdown("""
+            <div class="feature-card">
+                <h4>🎯 How it Works</h4>
+                <p>Simply navigate to the <strong>Speech Training</strong> tab, choose between words or sentences, 
+                record your voice or upload an audio file, and get instant analysis results with detailed feedback.</p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col2:
+            st.markdown("""
+            <div class="feature-card">
+                <h4>📊 Key Metrics</h4>
+                <ul>
+                    <li>🎵 Formant Analysis</li>
+                    <li>📈 Pitch Variation</li>
+                    <li>🔊 Intensity Patterns</li>
+                    <li>⚡ Speaking Rate</li>
+                    <li>🌊 Spectral Features</li>
+                </ul>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        st.markdown("---")
+        
+        st.markdown("### 🔬 Analysis Features")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.markdown("""
+            **🎵 Formant Frequencies**
+            - F1, F2, F3 analysis
+            - Vowel clarity assessment
+            - Articulation precision
+            """)
+        
+        with col2:
+            st.markdown("""
+            **📐 Vowel Space Area**
+            - Vowel articulation space
+            - Speech motor control
+            - Coordination patterns
+            """)
+        
+        with col3:
+            st.markdown("""
+            **⏱️ Temporal Features**
+            - Speaking rate analysis
+            - Pause patterns
+            - Rhythm assessment
+            """)
+        
+        with col4:
+            st.markdown("""
+            **🌊 Spectral Analysis**
+            - MFCC features
+            - Spectral characteristics
+            - Voice quality metrics
+            """)
+    
+    with tab2:
+        st.markdown("### 🎯 Speech Training & Analysis")
+        
+        # Text generation section
+        st.markdown("#### 📝 Step 1: Generate Practice Text")
+        
+        col1, col2, col3 = st.columns([1, 1, 1])
+        
+        with col1:
+            choice = st.radio("Choose training type:", ["Word", "Sentence"], horizontal=True)
+        
+        with col2:
+            if st.button("🎲 Generate New Text", type="primary", use_container_width=True):
+                if choice == "Word":
+                    st.session_state.generated_text = random.choice(word_list)
+                else:
+                    st.session_state.generated_text = random.choice(sentence_list)
+        
+        with col3:
+            if 'generated_text' in st.session_state:
+                if st.button("🔊 Listen to Example", use_container_width=True):
+                    with st.spinner("Generating audio..."):
+                        audio_file = text_to_speech(st.session_state.generated_text)
+                        st.audio(audio_file)
+                        os.unlink(audio_file)
+        
+        if 'generated_text' in st.session_state:
+            st.markdown("#### 📖 Practice Text:")
+            st.markdown(f"""
+            <div style="background: linear-gradient(90deg, #f8f9fa 0%, #e9ecef 100%); 
+                        padding: 2rem; border-radius: 10px; border-left: 5px solid #667eea; 
+                        font-size: 1.2em; font-weight: 500; text-align: center; margin: 1rem 0;">
+                "{st.session_state.generated_text}"
+            </div>
+            """, unsafe_allow_html=True)
+            
+            st.markdown("---")
+            
+            # Audio input section
+            st.markdown("#### 🎤 Step 2: Record Your Voice")
+            
+            # Option selector
+            audio_option = st.radio(
+                "Choose how to provide your audio:",
+                ["🎙️ Record Live", "📁 Upload File"],
+                horizontal=True
+            )
+            
+            audio_data = None
+            audio_path = None
+            
+            if audio_option == "🎙️ Record Live":
+                st.markdown("""
+                <div class="audio-option">
+                    <h5>🎙️ Live Recording</h5>
+                    <p>Click the record button below and speak clearly into your microphone.</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                audio_bytes = st.audio_input("Record your speech")
+                if audio_bytes is not None:
+                    audio_data = audio_bytes
+                    
+            else:
+                st.markdown("""
+                <div class="audio-option">
+                    <h5>📁 File Upload</h5>
+                    <p>Upload a WAV audio file of your speech (max 10MB).</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                uploaded_file = st.file_uploader(
+                    "Choose an audio file",
+                    type=['wav'],
+                    help="Please upload a WAV file containing your speech"
+                )
+                if uploaded_file is not None:
+                    audio_data = uploaded_file
+            
+            # Process audio if available
+            if audio_data is not None:
+                os.makedirs("recordings", exist_ok=True)
+                
+                if audio_option == "🎙️ Record Live":
+                    audio_path = os.path.join("recordings", "user_recording.wav")
+                else:
+                    audio_path = os.path.join("recordings", uploaded_file.name)
+                
+                with open(audio_path, "wb") as f:
+                    f.write(audio_data.getbuffer())
+                
+                st.markdown("#### 🔊 Your Audio:")
+                st.audio(audio_data)
+                
+                # Analysis section
+                st.markdown("---")
+                st.markdown("#### 🔬 Step 3: Analysis Results")
+                
+                with st.spinner("🤖 Analyzing your speech... This may take a moment."):
+                    transcription = transcribe_audio(audio_path)
+                    prediction, probability = analyzer.predict(audio_path)
+                
+                # Transcription results
+                st.markdown("##### 📝 Speech Transcription:")
+                st.markdown(f"""
+                <div style="background: #f8f9fa; padding: 1.5rem; border-radius: 8px; 
+                           border-left: 4px solid #28a745; font-style: italic; font-size: 1.1em;">
+                    "{transcription}"
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Analysis results
+                if prediction is not None:
+                    st.markdown("##### 🎯 Dysarthria Analysis:")
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        if prediction == 1:
+                            st.markdown("""
+                            <div class="result-dysarthria">
+                                <h4>🔴 DYSARTHRIA DETECTED</h4>
+                                <p>The analysis indicates potential speech articulation difficulties.</p>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            confidence = probability[1] * 100
+                        else:
+                            st.markdown("""
+                            <div class="result-normal">
+                                <h4>🟢 NORMAL SPEECH</h4>
+                                <p>Your speech patterns appear to be within normal ranges.</p>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            confidence = probability[0] * 100
+                        
+                        st.metric("Confidence Level", f"{confidence:.1f}%")
+                    
+                    with col2:
+                        st.markdown("**Detailed Probabilities:**")
+                        st.progress(probability[0], text=f"Normal: {probability[0]:.3f}")
+                        st.progress(probability[1], text=f"Dysarthria: {probability[1]:.3f}")
+                    
+                    # Recommendations
+                    st.markdown("##### 💡 Recommendations:")
+                    if prediction == 1:
+                        st.warning("""
+                        **⚠️ Consultation Recommended**
+                        
+                        The analysis suggests possible articulation challenges. Consider:
+                        - Consulting with a speech-language pathologist
+                        - Regular speech therapy sessions
+                        - Continued practice with speech exercises
+                        - Follow-up assessments to monitor progress
+                        """)
+                    else:
+                        st.success("""
+                        **✅ Great Speech Quality!**
+                        
+                        Your speech analysis shows positive results:
+                        - Continue practicing to maintain clarity
+                        - Regular vocal exercises can help
+                        - Keep up the excellent work!
+                        - Consider periodic check-ups if needed
+                        """)
+                    
+                    # Additional metrics
+                    with st.expander("📊 View Detailed Metrics"):
+                        features = analyzer.extract_all_features(audio_path)
+                        
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            st.metric("F1 Mean (Hz)", f"{features.get('f1_mean', 0):.1f}")
+                            st.metric("F2 Mean (Hz)", f"{features.get('f2_mean', 0):.1f}")
+                            st.metric("F3 Mean (Hz)", f"{features.get('f3_mean', 0):.1f}")
+                        
+                        with col2:
+                            st.metric("Pitch Mean (Hz)", f"{features.get('pitch_mean', 0):.1f}")
+                            st.metric("Pitch Range (Hz)", f"{features.get('pitch_range', 0):.1f}")
+                            st.metric("Speaking Rate (WPM)", f"{features.get('speaking_rate', 0):.1f}")
+                        
+                        with col3:
+                            st.metric("Intensity Mean (dB)", f"{features.get('intensity_mean', 0):.1f}")
+                            st.metric("Spectral Centroid", f"{features.get('spectral_centroid_mean', 0):.1f}")
+                            st.metric("VSA", f"{features.get('vsa', 0):.1f}")
+                
+                else:
+                    st.error("❌ Failed to analyze audio. Please try again with a clearer recording.")
+                
+                # Cleanup
+                if os.path.exists(audio_path):
+                    os.unlink(audio_path)
+
+if __name__ == "__main__":
+    main()
