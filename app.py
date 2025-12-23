@@ -166,9 +166,6 @@ class DysarthriaAnalyzer:
         self.model = None
         self.scaler = None
         self.load_model()
-        print("MODEL INFO:")
-        print("Model type:", type(self.model))
-        print("Scaler mean (first 7):", self.scaler.mean_[:7])
         
         
         
@@ -254,9 +251,7 @@ class DysarthriaAnalyzer:
                 praat_jitter_local = call(pitch, "Get jitter (local)", 0, 0, 0.0001, 0.02, 1.3)
                 if np.isnan(praat_jitter_local) or np.isinf(praat_jitter_local):
                     praat_jitter_local = 0
-                print(f"Praat jitter local: {praat_jitter_local:.6f}")
             except Exception as e:
-                print(f"Praat jitter local error: {e}")
                 praat_jitter_local = 0
                 
             try:
@@ -273,7 +268,6 @@ class DysarthriaAnalyzer:
             try:
                 point_process = call(sound, "To PointProcess (periodic, cc)", 75, 500)
                 num_points = call(point_process, "Get number of points")
-                print(f"Point process points: {num_points}")
                 
                 if num_points > 10:
                     shimmer_local = call([sound, point_process], "Get shimmer (local)", 0, 0, 0.0001, 0.02, 1.3, 1.6)
@@ -285,7 +279,7 @@ class DysarthriaAnalyzer:
                         shimmer_db = 0
                         
                 else:
-                    print("Not enough points for shimmer calculation")
+                    pass
             except Exception as e:
                 shimmer_local = 0
                 shimmer_db = 0
@@ -309,8 +303,8 @@ class DysarthriaAnalyzer:
     def calculate_word_error_rate(self, audio_path, ground_truth_text):
         """Calculate Word Error Rate - FIXED VERSION"""
         try:
-            # Load whisper model
-            whisper_model = whisper.load_model("base")
+            # Use cached whisper model
+            whisper_model = load_whisper_model()
             
             # Transcribe dengan parameter yang lebih sensitif
             result = whisper_model.transcribe(
@@ -320,7 +314,8 @@ class DysarthriaAnalyzer:
                 no_speech_threshold=0.3,  # Lebih sensitif untuk menangkap speech
                 logprob_threshold=-1.5,   # Lebih permisif
                 compression_ratio_threshold=2.4,
-                condition_on_previous_text=False
+                condition_on_previous_text=False,
+                fp16=False  # Disable fp16 for stability
             )
             
             recognized_text = result["text"].strip().lower()
@@ -514,7 +509,7 @@ class DysarthriaAnalyzer:
                 }
                 
         except Exception as e:
-            print("❌ Error extracting prosodic features:", e)
+            pass
         
         # Jika gagal, return 0 semua (bukan default values)
         return {
@@ -557,8 +552,7 @@ class DysarthriaAnalyzer:
                 return features
                 
             except Exception as e:
-                print(f"Error extracting spectral features from {audio_path}: {e}")
-                # Return default values
+                # Return default values on error
                 features = {
                     'spectral_centroid_mean': 0, 'spectral_centroid_std': 0,
                     'spectral_bandwidth_mean': 0, 'spectral_rolloff_mean': 0,
@@ -612,13 +606,6 @@ class DysarthriaAnalyzer:
             decision_score = self.model.decision_function(feature_vector_scaled)[0]
             probability = np.array([1 / (1 + np.exp(decision_score)), 1 / (1 + np.exp(-decision_score))])
         
-        print("=== DEBUG ===")
-        print("Extracted features (raw):", features)
-        print("Feature vector shape:", feature_vector.shape)
-        print("Scaled vector shape:", feature_vector_scaled.shape)
-        print("Scaled vector values:", feature_vector_scaled)
-        print("Predicted proba:", probability)
-        
         return prediction, probability
 
 def text_to_speech(text, lang='en'):
@@ -647,7 +634,12 @@ def transcribe_audio(audio_path):
 
 @st.cache_resource
 def load_whisper_model():
-    return whisper.load_model("medium")
+    return whisper.load_model("base", device="cpu")
+
+@st.cache_resource
+def load_dysarthria_analyzer():
+    """Load and cache the dysarthria analyzer to prevent reinitalization on each rerun"""
+    return DysarthriaAnalyzer("models/dysarthria_classifier.joblib")
 
 def main():
     st.set_page_config(page_title="VoiceBoost - Dysarthria Detection", layout="wide", page_icon="🎙️")
@@ -710,7 +702,7 @@ def main():
     </div>
     """, unsafe_allow_html=True)
     
-    analyzer = DysarthriaAnalyzer("models/dysarthria_classifier.joblib")
+    analyzer = load_dysarthria_analyzer()
     
     tab1, tab2 = st.tabs(["🏠 Home", "🎯 Speech Training"])
     
