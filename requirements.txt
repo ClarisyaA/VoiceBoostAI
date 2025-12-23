@@ -4,7 +4,7 @@ scikit-learn
 numpy
 pandas
 gTTS
-openai-whisper
+git+https://github.com/openai/whisper.git
 soundfile
 scipy
 matplotlib
